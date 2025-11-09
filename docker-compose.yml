@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: english_bot_db
+    environment:
+      POSTGRES_USER: botuser
+      POSTGRES_PASSWORD: botpassword
+      POSTGRES_DB: english_learning_bot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U botuser"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: english_bot_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    command: serve
+
+  app:
+    build: .
+    container_name: english_bot_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://botuser:botpassword@postgres:5432/english_learning_bot
+      - OLLAMA_API_URL=http://ollama:11434
+    env_file:
+      - .env
+    volumes:
+      - ./videos:/app/videos
+      - ./audio:/app/audio
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    command: >
+      sh -c "
+        sleep 10 &&
+        python -m app.database.init_db &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+
+  bot:
+    build: .
+    container_name: english_bot_telegram
+    depends_on:
+      - app
+      - postgres
+      - ollama
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://botuser:botpassword@postgres:5432/english_learning_bot
+      - OLLAMA_API_URL=http://ollama:11434
+    env_file:
+      - .env
+    volumes:
+      - ./videos:/app/videos
+      - ./audio:/app/audio
+      - ./logs:/app/logs
+    restart: unless-stopped
+    command: python run_bot.py
+
+volumes:
+  postgres_data:
+  ollama_data:
