@@ -45,7 +45,7 @@ class UserService:
                 telegram_id=telegram_id,
                 username=username,
                 referral_code=referral_code,
-                status=UserStatus.PENDING
+                    status=UserStatus.ACTIVE  #status=UserStatus.PENDING #BUG FIX: Set to ACTIVE for testing purposes
             )
             
             db.add(user)
