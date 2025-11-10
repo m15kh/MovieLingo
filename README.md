@@ -56,7 +56,7 @@ Edit `.env` with your configuration.
 
 ```bash
 # Create database
-createdb english_learning_bot
+createdb MovieLingo
 
 # Run migrations
 python -m app.database.init_db
@@ -66,7 +66,7 @@ python -m app.database.init_db
 
 ```bash
 # Pull the model
-ollama pull llama2
+ollama pull qwen2.5:7b
 
 # Ollama should be running on http://localhost:11434
 ```
