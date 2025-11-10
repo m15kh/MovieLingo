@@ -23,6 +23,12 @@ class BotHandlers:
         """Handle /start command"""
         user = update.effective_user
         
+        # Extract referral code from /start parameter
+        referral_code = None
+        if context.args and len(context.args) > 0:
+            referral_code = context.args[0]
+            logger.info(f"User {user.id} started with referral code: {referral_code}")
+        
         async with await self.get_db() as db:
             # Check if user exists, create if not
             db_user = await user_service.get_user_by_telegram_id(db, user.id)
@@ -31,6 +37,47 @@ class BotHandlers:
                 db_user = await user_service.create_user(
                     db, user.id, user.username
                 )
+                
+                # Process referral if provided
+                if referral_code:
+                    # Find the referrer
+                    referrer = await user_service.get_user_by_referral_code(db, referral_code)
+                    
+                    if referrer and referrer.id != db_user.id:
+                        # Link the referral
+                        await user_service.add_referral(db, referrer.id, db_user.id)
+                        
+                        # Check if referrer now has enough referrals to activate
+                        if referrer.referral_count + 1 >= settings.REFERRAL_REQUIREMENT:
+                            await user_service.activate_user(db, referrer.id)
+                            
+                            # Notify referrer
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=referrer.telegram_id,
+                                    text=(
+                                        "🎉 Congratulations!\n\n"
+                                        f"You've invited {settings.REFERRAL_REQUIREMENT} friends!\n"
+                                        "Your account is now ACTIVATED! 🚀\n\n"
+                                        "You can now participate in challenges!"
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to notify referrer: {e}")
+                        else:
+                            # Notify referrer of progress
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=referrer.telegram_id,
+                                    text=(
+                                        f"👥 New referral!\n\n"
+                                        f"@{user.username or 'Someone'} joined using your link!\n"
+                                        f"Progress: {referrer.referral_count + 1}/{settings.REFERRAL_REQUIREMENT}"
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to notify referrer: {e}")
+                
                 welcome_msg = (
                     f"👋 Welcome {user.first_name}!\n\n"
                     "🎬 Learn English with movie clips!\n\n"
@@ -41,6 +88,9 @@ class BotHandlers:
                     "4️⃣ Earn points & compete!\n\n"
                     "Let's get started! 🚀"
                 )
+                
+                if referral_code and referrer:
+                    welcome_msg += f"\n\n✅ Referred by: @{referrer.username or 'friend'}"
             else:
                 welcome_msg = f"Welcome back, {user.first_name}! 👋"
             

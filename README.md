@@ -72,10 +72,16 @@ ollama pull qwen2.5:7b
 ```
 
 ### 5. Run the Application
-
+```bash
+# (Optional) Reinstall numpy for compatibility
+pip install "numpy<2" --force-reinstall
+```
 ```bash
 # Start FastAPI server
 uvicorn app.main:app --reload --port 8000
+```
+
+```bash
 
 # In another terminal, start the bot
 python run_bot.py

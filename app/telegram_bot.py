@@ -78,27 +78,24 @@ def setup_bot() -> Application:
     return application
 
 
-async def start_bot():
-    """Start the bot"""
+def start_bot():
+    """Start the bot (synchronous version)"""
     logger.info("Starting Telegram bot...")
     
     application = setup_bot()
     
+    logger.success("Bot initialized successfully!")
     logger.info("Bot is running! Press Ctrl+C to stop.")
     
-    # Start the bot
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(allowed_updates=["message", "callback_query"])
-    
-    # Run until stopped
-    await application.updater.idle()
-    
-    # Cleanup
-    await application.stop()
-    await application.shutdown()
+    # Run the bot with polling - this is a blocking call
+    application.run_polling(
+        allowed_updates=["message", "callback_query"],
+        drop_pending_updates=True
+    )
 
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(start_bot())
+    try:
+        start_bot()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
