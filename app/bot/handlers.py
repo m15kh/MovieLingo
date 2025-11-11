@@ -9,8 +9,10 @@ from app.database.models import UserStatus
 from app.services import user_service, payment_service, challenge_service
 from app.core.config import settings
 from loguru import logger
-
-
+from app.database.models import (
+    User, Payment, Challenge, Video, Question, ChallengeAttempt,
+    UserStatus, PaymentStatus, ChallengeStatus
+)
 class BotHandlers:
     """Main bot handlers for user interactions"""
     

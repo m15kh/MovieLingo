@@ -236,14 +236,20 @@ class UserService:
         # Get user
         user = await db.get(User, user_id)
         if not user or user.status != UserStatus.ACTIVE:
+            logger.info(f"User {user_id} cannot participate - not active")
             return False
         
-        # Check if challenge is active
+        # Check if challenge exists and is active
         challenge = await db.get(Challenge, challenge_id)
-        if not challenge or challenge.status != ChallengeStatus.ACTIVE:
+        if not challenge:
+            logger.info(f"Challenge {challenge_id} not found")
             return False
         
-        # Check if user already has an attempt
+        if challenge.status != ChallengeStatus.ACTIVE:
+            logger.info(f"Challenge {challenge_id} is not active (status: {challenge.status})")
+            return False
+        
+        # Check if user already has an attempt for this challenge
         result = await db.execute(
             select(ChallengeAttempt)
             .where(
@@ -253,8 +259,16 @@ class UserService:
         )
         existing_attempt = result.scalar_one_or_none()
         
-        return existing_attempt is None
-    
+        # User CAN participate if they DON'T have an existing attempt
+        can_participate = existing_attempt is None
+        
+        logger.info(
+            f"User {user_id} participation check for challenge {challenge_id}: "
+            f"{'CAN' if can_participate else 'CANNOT'} participate "
+            f"(existing_attempt: {existing_attempt is not None})"
+        )
+        
+        return can_participate
     async def add_to_waitlist(
         self,
         db: AsyncSession,
