@@ -56,7 +56,7 @@ Edit `.env` with your configuration.
 
 ```bash
 # Create database
-createdb english_learning_bot
+createdb MovieLingo
 
 # Run migrations
 python -m app.database.init_db
@@ -66,16 +66,22 @@ python -m app.database.init_db
 
 ```bash
 # Pull the model
-ollama pull llama2
+ollama pull qwen2.5:7b
 
 # Ollama should be running on http://localhost:11434
 ```
 
 ### 5. Run the Application
-
+```bash
+# (Optional) Reinstall numpy for compatibility
+pip install "numpy<2" --force-reinstall
+```
 ```bash
 # Start FastAPI server
 uvicorn app.main:app --reload --port 8000
+```
+
+```bash
 
 # In another terminal, start the bot
 python run_bot.py

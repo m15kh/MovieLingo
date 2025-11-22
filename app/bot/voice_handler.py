@@ -5,7 +5,9 @@ import uuid
 from datetime import datetime
 
 from app.database import AsyncSessionLocal
-from app.database.models import VideoAttempt
+from app.database.models import (
+    User, Video, VideoAttempt, ChallengeAttempt,
+)
 from app.services import whisper_service, challenge_service, user_service, ollama_service
 from app.core.config import settings
 from loguru import logger

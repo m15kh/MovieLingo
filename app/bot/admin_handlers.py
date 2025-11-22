@@ -1,11 +1,13 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from datetime import datetime, timedelta
+from sqlalchemy import select, update, delete
 import os
 
 from app.database import AsyncSessionLocal
 from app.database.models import (
     User, Payment, Challenge, Video, Question,
+    ChallengeAttempt, VideoAttempt,
     UserStatus, PaymentStatus, ChallengeStatus
 )
 from app.services import user_service, ollama_service
@@ -31,6 +33,7 @@ class AdminHandlers:
             [InlineKeyboardButton("📹 Add Video", callback_data="admin_add_video")],
             [InlineKeyboardButton("🎬 Create Challenge", callback_data="admin_create_challenge")],
             [InlineKeyboardButton("📤 Send Challenge", callback_data="admin_send_challenge")],
+            [InlineKeyboardButton("🔄 Re-send Last Challenge", callback_data="admin_resend_last")],
             [InlineKeyboardButton("💳 Pending Payments", callback_data="admin_payments")],
             [InlineKeyboardButton("📊 Statistics", callback_data="admin_stats")]
         ]
@@ -56,6 +59,8 @@ class AdminHandlers:
             await self.prompt_create_challenge(query, context)
         elif query.data == "admin_send_challenge":
             await self.send_challenge_to_users(query, context)
+        elif query.data == "admin_resend_last":
+            await self.resend_last_challenge(query, context)
         elif query.data == "admin_payments":
             await self.show_pending_payments(query, context)
         elif query.data == "admin_stats":
@@ -284,8 +289,10 @@ class AdminHandlers:
     
     async def send_challenge_to_users(self, query, context):
         """Send active challenge to all active users"""
+        from telegram import ReplyKeyboardMarkup, KeyboardButton
+        
         async with AsyncSessionLocal() as db:
-            # Get active challenge
+            # Get scheduled challenge
             from sqlalchemy import select
             result = await db.execute(
                 select(Challenge)
@@ -299,15 +306,30 @@ class AdminHandlers:
                 await query.edit_message_text("⚠️ No scheduled challenges.")
                 return
             
-            # Activate challenge
+            # Deactivate ALL other active challenges first
+            await db.execute(
+                update(Challenge)
+                .where(Challenge.status == ChallengeStatus.ACTIVE)
+                .values(status=ChallengeStatus.COMPLETED)
+            )
+            
+            # Activate THIS challenge
             challenge.status = ChallengeStatus.ACTIVE
             await db.commit()
+            
+            logger.info(f"Challenge {challenge.id} activated, all previous challenges completed")
             
             # Get all active users
             result = await db.execute(
                 select(User).where(User.status == UserStatus.ACTIVE)
             )
             users = result.scalars().all()
+            
+            # Create keyboard with Start Challenge button
+            keyboard = ReplyKeyboardMarkup(
+                [[KeyboardButton("🎬 Start Challenge")]],
+                resize_keyboard=True
+            )
             
             # Send notification
             sent = 0
@@ -318,8 +340,9 @@ class AdminHandlers:
                         text=(
                             f"🎬 New Challenge Available!\n\n"
                             f"{challenge.title}\n\n"
-                            "Tap '🎬 Start Challenge' to begin!"
-                        )
+                            "Tap the button below to begin!"
+                        ),
+                        reply_markup=keyboard
                     )
                     sent += 1
                 except Exception as e:
@@ -327,6 +350,96 @@ class AdminHandlers:
             
             await query.edit_message_text(
                 f"✅ Challenge activated and sent to {sent} users!"
+            )
+    
+    async def resend_last_challenge(self, query, context):
+        """Re-send the most recent challenge (for testing)"""
+        from telegram import ReplyKeyboardMarkup, KeyboardButton
+        from sqlalchemy import func
+        
+        async with AsyncSessionLocal() as db:
+            # Get the LATEST challenge (regardless of status)
+            result = await db.execute(
+                select(Challenge)
+                .order_by(Challenge.id.desc())
+                .limit(1)
+            )
+            challenge = result.scalar_one_or_none()
+            
+            if not challenge:
+                await query.edit_message_text("⚠️ No challenges found.")
+                return
+            
+            # Check if it has videos
+            result = await db.execute(
+                select(func.count(Video.id))
+                .where(Video.challenge_id == challenge.id)
+            )
+            video_count = result.scalar()
+            
+            if video_count < 3:
+                await query.edit_message_text(
+                    f"⚠️ Challenge '{challenge.title}' only has {video_count}/3 videos.\n"
+                    "Add more videos before sending."
+                )
+                return
+            
+            # Mark ALL other challenges as COMPLETED
+            await db.execute(
+                update(Challenge)
+                .where(Challenge.id != challenge.id)
+                .values(status=ChallengeStatus.COMPLETED)
+            )
+            
+            # DELETE video attempts FIRST (they reference challenge_attempts)
+            await db.execute(delete(VideoAttempt))
+            
+            # THEN delete challenge attempts
+            await db.execute(
+                delete(ChallengeAttempt)
+                .where(ChallengeAttempt.challenge_id == challenge.id)
+            )
+            
+            # Mark THIS challenge as ACTIVE
+            challenge.status = ChallengeStatus.ACTIVE
+            await db.commit()
+            
+            logger.info(f"Re-sending challenge {challenge.id}: {challenge.title}")
+            
+            # Get all active users
+            result = await db.execute(
+                select(User).where(User.status == UserStatus.ACTIVE)
+            )
+            users = result.scalars().all()
+            
+            # Create keyboard with Start Challenge button
+            keyboard = ReplyKeyboardMarkup(
+                [[KeyboardButton("🎬 Start Challenge")]],
+                resize_keyboard=True
+            )
+            
+            # Send notification
+            sent = 0
+            for user in users:
+                try:
+                    await context.bot.send_message(
+                        chat_id=user.telegram_id,
+                        text=(
+                            f"🎬 New Challenge Available!\n\n"
+                            f"{challenge.title}\n\n"
+                            "Tap the button below to begin!"
+                        ),
+                        reply_markup=keyboard
+                    )
+                    sent += 1
+                except Exception as e:
+                    logger.error(f"Failed to notify user {user.id}: {e}")
+            
+            await query.edit_message_text(
+                f"🔄 Challenge re-sent!\n\n"
+                f"'{challenge.title}' (ID: {challenge.id})\n"
+                f"Sent to {sent} user(s)\n\n"
+                f"Videos: {video_count}/3"
             )
     
     async def show_pending_payments(self, query, context):
