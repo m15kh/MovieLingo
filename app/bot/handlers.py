@@ -23,6 +23,12 @@ class BotHandlers:
         """Handle /start command"""
         user = update.effective_user
         
+        # Extract referral code from /start parameter
+        referral_code = None
+        if context.args and len(context.args) > 0:
+            referral_code = context.args[0]
+            logger.info(f"User {user.id} started with referral code: {referral_code}")
+        
         async with await self.get_db() as db:
             # Check if user exists, create if not
             db_user = await user_service.get_user_by_telegram_id(db, user.id)
@@ -31,6 +37,47 @@ class BotHandlers:
                 db_user = await user_service.create_user(
                     db, user.id, user.username
                 )
+                
+                # Process referral if provided
+                if referral_code:
+                    # Find the referrer
+                    referrer = await user_service.get_user_by_referral_code(db, referral_code)
+                    
+                    if referrer and referrer.id != db_user.id:
+                        # Link the referral
+                        await user_service.add_referral(db, referrer.id, db_user.id)
+                        
+                        # Check if referrer now has enough referrals to activate
+                        if referrer.referral_count + 1 >= settings.REFERRAL_REQUIREMENT:
+                            await user_service.activate_user(db, referrer.id)
+                            
+                            # Notify referrer
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=referrer.telegram_id,
+                                    text=(
+                                        "🎉 Congratulations!\n\n"
+                                        f"You've invited {settings.REFERRAL_REQUIREMENT} friends!\n"
+                                        "Your account is now ACTIVATED! 🚀\n\n"
+                                        "You can now participate in challenges!"
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to notify referrer: {e}")
+                        else:
+                            # Notify referrer of progress
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=referrer.telegram_id,
+                                    text=(
+                                        f"👥 New referral!\n\n"
+                                        f"@{user.username or 'Someone'} joined using your link!\n"
+                                        f"Progress: {referrer.referral_count + 1}/{settings.REFERRAL_REQUIREMENT}"
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to notify referrer: {e}")
+                
                 welcome_msg = (
                     f"👋 Welcome {user.first_name}!\n\n"
                     "🎬 Learn English with movie clips!\n\n"
@@ -41,6 +88,9 @@ class BotHandlers:
                     "4️⃣ Earn points & compete!\n\n"
                     "Let's get started! 🚀"
                 )
+                
+                if referral_code and referrer:
+                    welcome_msg += f"\n\n✅ Referred by: @{referrer.username or 'friend'}"
             else:
                 welcome_msg = f"Welcome back, {user.first_name}! 👋"
             
@@ -109,18 +159,19 @@ class BotHandlers:
         return True
     
     async def show_activation_options(
-        self, 
-        update: Update, 
-        context: ContextTypes.DEFAULT_TYPE, 
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
         user
     ):
         """Show activation options: payment or referrals"""
         keyboard = [
-            [InlineKeyboardButton("💳 Pay $1", callback_data="activate_payment")],
+            [InlineKeyboardButton("💳 Pay with Card Transfer", callback_data="activate_manual_payment")],
+            [InlineKeyboardButton("🌐 Pay with Stripe", callback_data="activate_stripe_payment")],
             [InlineKeyboardButton("👥 Invite 5 Friends", callback_data="activate_referral")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         await update.message.reply_text(
             "🔓 Activate your account:\n\n"
             f"Option 1: Pay ${settings.CHALLENGE_PRICE}\n"
@@ -153,27 +204,48 @@ class BotHandlers:
                 await self.show_activation_options(update, context, user)
     
     async def handle_activation_callback(
-        self, 
-        update: Update, 
+        self,
+        update: Update,
         context: ContextTypes.DEFAULT_TYPE
     ):
         """Handle activation button callbacks"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
-        
+
         async with await self.get_db() as db:
             user = await user_service.get_user_by_telegram_id(db, user_id)
-            
-            if query.data == "activate_payment":
-                # Generate payment link
+
+            if query.data == "activate_manual_payment":
+                # Show bank card details for manual payment
+                await query.edit_message_text(
+                    f"💳 Manual Payment Instructions\n\n"
+                    f"Amount: ${settings.CHALLENGE_PRICE}\n\n"
+                    f"🏦 Bank Details:\n"
+                    f"Card Number: `{settings.BANK_CARD_NUMBER}`\n"
+                    f"Card Holder: {settings.BANK_CARD_HOLDER}\n"
+                    f"Bank: {settings.BANK_NAME}\n\n"
+                    f"📸 After payment:\n"
+                    f"1. Take a screenshot of your payment receipt\n"
+                    f"2. Send the screenshot to this bot\n"
+                    f"3. Admin will review and approve your payment\n\n"
+                    f"⏳ Waiting for your payment receipt...",
+                    parse_mode='Markdown'
+                )
+
+                # Set user state to expect payment receipt
+                context.user_data['awaiting_payment_receipt'] = True
+                context.user_data['payment_user_id'] = user.id
+
+            elif query.data == "activate_stripe_payment":
+                # Generate Stripe payment link
                 payment_link = await payment_service.create_payment_link(user.id)
-                
+
                 if payment_link:
                     keyboard = [[InlineKeyboardButton("💳 Pay Now", url=payment_link)]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
-                    
+
                     await query.edit_message_text(
                         f"💳 Payment Link Generated!\n\n"
                         f"Amount: ${settings.CHALLENGE_PRICE}\n\n"
@@ -183,10 +255,10 @@ class BotHandlers:
                     )
                 else:
                     await query.edit_message_text("❌ Error creating payment link. Please try again later.")
-            
+
             elif query.data == "activate_referral":
                 ref_link = f"https://t.me/{context.bot.username}?start={user.referral_code}"
-                
+
                 await query.edit_message_text(
                     "👥 Invite Friends!\n\n"
                     f"Share your referral link:\n`{ref_link}`\n\n"
@@ -374,16 +446,16 @@ class BotHandlers:
     async def show_my_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show user's statistics"""
         user_id = update.effective_user.id
-        
+
         async with await self.get_db() as db:
             user = await user_service.get_user_by_telegram_id(db, user_id)
-            
+
             if not user:
                 await update.message.reply_text("⚠️ User not found.")
                 return
-            
+
             rank = await user_service.get_user_rank(db, user.id)
-            
+
             stats_text = (
                 "📈 Your Statistics\n\n"
                 f"Total Points: {user.total_points}\n"
@@ -391,8 +463,86 @@ class BotHandlers:
                 f"Referrals: {user.referral_count}\n"
                 f"Status: {user.status.value.upper()}\n"
             )
-            
+
             await update.message.reply_text(stats_text)
+
+    async def handle_payment_receipt(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle payment receipt photo from user"""
+        # Check if user is expecting to send payment receipt
+        if not context.user_data.get('awaiting_payment_receipt'):
+            return
+
+        user_id = update.effective_user.id
+
+        async with await self.get_db() as db:
+            from app.database.models import Payment, PaymentStatus
+
+            user = await user_service.get_user_by_telegram_id(db, user_id)
+
+            if not user:
+                await update.message.reply_text("⚠️ User not found.")
+                return
+
+            # Get the photo file_id (largest size)
+            photo = update.message.photo[-1]
+            file_id = photo.file_id
+
+            # Create payment record
+            payment = Payment(
+                user_id=user.id,
+                amount=settings.CHALLENGE_PRICE,
+                payment_method="manual",
+                payment_receipt_file_id=file_id,
+                status=PaymentStatus.PENDING
+            )
+            db.add(payment)
+            await db.commit()
+            await db.refresh(payment)
+
+            # Notify user
+            await update.message.reply_text(
+                "✅ Payment receipt received!\n\n"
+                "Your payment is now under review by our admin team.\n"
+                "You'll be notified once it's approved.\n\n"
+                "⏳ This usually takes a few minutes to 24 hours."
+            )
+
+            # Clear the awaiting state
+            context.user_data['awaiting_payment_receipt'] = False
+            context.user_data.pop('payment_user_id', None)
+
+            # Notify admin
+            for admin_id in settings.admin_ids:
+                try:
+                    keyboard = [
+                        [
+                            InlineKeyboardButton("✅ Approve", callback_data=f"approve_payment_{payment.id}"),
+                            InlineKeyboardButton("❌ Reject", callback_data=f"reject_payment_{payment.id}")
+                        ]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"💳 New Payment Receipt!\n\n"
+                            f"User: @{user.username or user.telegram_id}\n"
+                            f"User ID: {user.telegram_id}\n"
+                            f"Amount: ${settings.CHALLENGE_PRICE}\n"
+                            f"Payment ID: {payment.id}\n\n"
+                            f"Please review the receipt below:"
+                        )
+                    )
+
+                    # Send the receipt photo to admin
+                    await context.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=file_id,
+                        reply_markup=reply_markup
+                    )
+
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin_id}: {e}")
 
 
 # Global instance

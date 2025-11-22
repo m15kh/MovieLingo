@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, ForeignKey, Text, Enum
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, DateTime, Float, ForeignKey, Text, Enum
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -30,7 +30,7 @@ class User(Base):
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(Integer, unique=True, index=True, nullable=False)
+    telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)
     username = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
     status = Column(Enum(UserStatus), default=UserStatus.PENDING)
@@ -49,16 +49,18 @@ class User(Base):
 
 class Payment(Base):
     __tablename__ = "payments"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     amount = Column(Float, nullable=False)
     stripe_payment_id = Column(String, unique=True, nullable=True)
+    payment_receipt_file_id = Column(String, nullable=True)  # Telegram file_id for receipt image
+    payment_method = Column(String, default="manual")  # "stripe" or "manual"
     status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING)
     created_at = Column(DateTime, default=datetime.utcnow)
     approved_at = Column(DateTime, nullable=True)
-    approved_by = Column(Integer, nullable=True)  # Admin ID
-    
+    approved_by = Column(BigInteger, nullable=True)
+    rejection_reason = Column(Text, nullable=True)
     # Relationships
     user = relationship("User", back_populates="payments")
 

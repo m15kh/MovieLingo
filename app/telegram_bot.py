@@ -34,12 +34,17 @@ def setup_bot() -> Application:
     application.add_handler(
         MessageHandler(filters.CONTACT, bot_handlers.handle_contact)
     )
-    
+
+    # Photo handler (payment receipts)
+    application.add_handler(
+        MessageHandler(filters.PHOTO, bot_handlers.handle_payment_receipt)
+    )
+
     # Voice message handler
     application.add_handler(
         MessageHandler(filters.VOICE, voice_handler.handle_voice)
     )
-    
+
     # Video upload handler (for admins)
     application.add_handler(
         MessageHandler(
@@ -69,7 +74,7 @@ def setup_bot() -> Application:
     application.add_handler(
         CallbackQueryHandler(
             admin_handlers.handle_admin_callback,
-            pattern="^approve_payment_"
+            pattern="^(approve_payment_|reject_payment_|review_payment_)"
         )
     )
     
@@ -77,28 +82,34 @@ def setup_bot() -> Application:
     
     return application
 
-
-async def start_bot():
-    """Start the bot"""
+def start_bot():
+    """Start the bot (synchronous version)"""
     logger.info("Starting Telegram bot...")
     
     application = setup_bot()
     
+    logger.success("Bot initialized successfully!")
     logger.info("Bot is running! Press Ctrl+C to stop.")
     
-    # Start the bot
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(allowed_updates=["message", "callback_query"])
-    
-    # Run until stopped
-    await application.updater.idle()
-    
-    # Cleanup
-    await application.stop()
-    await application.shutdown()
+    # Run the bot with polling - this is a blocking call
+    application.run_polling(
+        allowed_updates=["message", "callback_query"],
+        drop_pending_updates=True
+    )
+
+def run_bot_sync():
+    """Synchronous wrapper to run the bot"""
+    import asyncio
+    try:
+        asyncio.run(start_bot())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(start_bot())
+    run_bot_sync()

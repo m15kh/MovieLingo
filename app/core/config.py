@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str
     STRIPE_PUBLISHABLE_KEY: str
     PAYMENT_AMOUNT: int = 100
+    BANK_CARD_NUMBER: str = "1234 5678 9012 3456"  # Default card number
+    BANK_CARD_HOLDER: str = "Your Name"
+    BANK_NAME: str = "Your Bank"
     
     # Application
     APP_NAME: str = "English Learning Bot"

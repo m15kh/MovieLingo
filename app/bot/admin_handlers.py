@@ -45,11 +45,11 @@ class AdminHandlers:
         """Handle admin panel callbacks"""
         query = update.callback_query
         await query.answer()
-        
+
         if not self.is_admin(query.from_user.id):
             await query.edit_message_text("⛔ Admin access required.")
             return
-        
+
         if query.data == "admin_add_video":
             await self.prompt_add_video(query, context)
         elif query.data == "admin_create_challenge":
@@ -60,9 +60,15 @@ class AdminHandlers:
             await self.show_pending_payments(query, context)
         elif query.data == "admin_stats":
             await self.show_stats(query, context)
+        elif query.data.startswith("review_payment_"):
+            payment_id = int(query.data.split("_")[-1])
+            await self.review_payment(query, context, payment_id)
         elif query.data.startswith("approve_payment_"):
             payment_id = int(query.data.split("_")[-1])
             await self.approve_payment(query, context, payment_id)
+        elif query.data.startswith("reject_payment_"):
+            payment_id = int(query.data.split("_")[-1])
+            await self.reject_payment(query, context, payment_id)
     
     async def prompt_add_video(self, query, context):
         """Prompt admin to add video"""
@@ -333,30 +339,81 @@ class AdminHandlers:
                 .order_by(Payment.created_at.desc())
             )
             payments = result.scalars().all()
-            
+
             if not payments:
                 await query.edit_message_text("✅ No pending payments!")
                 return
-            
+
             text = "💳 Pending Payments:\n\n"
             keyboard = []
-            
+
             for payment in payments[:10]:  # Show max 10
                 user = await db.get(User, payment.user_id)
+                payment_type = "📸 Manual" if payment.payment_method == "manual" else "💳 Stripe"
+
+                text += f"{payment_type}\n"
                 text += f"User: @{user.username or user.telegram_id}\n"
                 text += f"Amount: ${payment.amount}\n"
-                text += f"Date: {payment.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
-                
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"✅ Approve {user.username or user.telegram_id}",
-                        callback_data=f"approve_payment_{payment.id}"
-                    )
-                ])
-            
+                text += f"Date: {payment.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                text += f"Payment ID: {payment.id}\n\n"
+
+                # If manual payment with receipt, show review button
+                if payment.payment_method == "manual" and payment.payment_receipt_file_id:
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"👁️ Review Receipt - {user.username or user.telegram_id}",
+                            callback_data=f"review_payment_{payment.id}"
+                        )
+                    ])
+                else:
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"✅ Approve {user.username or user.telegram_id}",
+                            callback_data=f"approve_payment_{payment.id}"
+                        )
+                    ])
+
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(text, reply_markup=reply_markup)
     
+    async def review_payment(self, query, context, payment_id: int):
+        """Show payment receipt for review"""
+        async with AsyncSessionLocal() as db:
+            payment = await db.get(Payment, payment_id)
+            if not payment:
+                await query.answer("Payment not found.")
+                return
+
+            user = await db.get(User, payment.user_id)
+
+            # Send receipt photo with approve/reject buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_payment_{payment.id}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_payment_{payment.id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            try:
+                await context.bot.send_photo(
+                    chat_id=query.message.chat_id,
+                    photo=payment.payment_receipt_file_id,
+                    caption=(
+                        f"💳 Payment Receipt Review\n\n"
+                        f"User: @{user.username or user.telegram_id}\n"
+                        f"User ID: {user.telegram_id}\n"
+                        f"Amount: ${payment.amount}\n"
+                        f"Payment ID: {payment.id}\n"
+                        f"Date: {payment.created_at.strftime('%Y-%m-%d %H:%M')}"
+                    ),
+                    reply_markup=reply_markup
+                )
+                await query.answer("Receipt displayed below")
+            except Exception as e:
+                logger.error(f"Failed to show receipt: {e}")
+                await query.answer("❌ Failed to load receipt")
+
     async def approve_payment(self, query, context, payment_id: int):
         """Approve a payment"""
         async with AsyncSessionLocal() as db:
@@ -364,17 +421,17 @@ class AdminHandlers:
             if not payment:
                 await query.answer("Payment not found.")
                 return
-            
+
             # Update payment
             payment.status = PaymentStatus.COMPLETED
             payment.approved_at = datetime.utcnow()
             payment.approved_by = query.from_user.id
-            
+
             # Activate user
             await user_service.activate_user(db, payment.user_id)
-            
+
             await db.commit()
-            
+
             # Notify user
             user = await db.get(User, payment.user_id)
             try:
@@ -384,11 +441,71 @@ class AdminHandlers:
                 )
             except Exception as e:
                 logger.error(f"Failed to notify user: {e}")
-            
+
             await query.answer("✅ Payment approved!")
-            await query.edit_message_text(
-                f"✅ Payment approved for user {user.username or user.telegram_id}"
-            )
+
+            # Try to edit the message or send new one
+            try:
+                await query.edit_message_text(
+                    f"✅ Payment approved for user @{user.username or user.telegram_id}"
+                )
+            except:
+                # If editing caption of photo, delete it
+                try:
+                    await query.message.delete()
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text=f"✅ Payment approved for user @{user.username or user.telegram_id}"
+                    )
+                except:
+                    pass
+
+    async def reject_payment(self, query, context, payment_id: int):
+        """Reject a payment"""
+        async with AsyncSessionLocal() as db:
+            payment = await db.get(Payment, payment_id)
+            if not payment:
+                await query.answer("Payment not found.")
+                return
+
+            # Update payment
+            payment.status = PaymentStatus.FAILED
+            payment.rejection_reason = "Payment receipt was not valid or could not be verified"
+
+            await db.commit()
+
+            # Notify user
+            user = await db.get(User, payment.user_id)
+            try:
+                await context.bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=(
+                        "❌ Your payment was not approved.\n\n"
+                        f"Reason: {payment.rejection_reason}\n\n"
+                        "Please try again or contact support if you believe this is a mistake.\n"
+                        "You can also use the referral option to activate your account."
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify user: {e}")
+
+            await query.answer("❌ Payment rejected")
+
+            # Try to edit the message or send new one
+            try:
+                await query.edit_message_text(
+                    f"❌ Payment rejected for user @{user.username or user.telegram_id}"
+                )
+            except:
+                # If editing caption of photo, delete it
+                try:
+                    await query.message.delete()
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text=f"❌ Payment rejected for user @{user.username or user.telegram_id}"
+                    )
+                except:
+                    pass
     
     async def show_stats(self, query, context):
         """Show system statistics"""
