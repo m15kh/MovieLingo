@@ -53,18 +53,9 @@ def setup_bot() -> Application:
         )
     )
     
-    # Text message handler
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler.handle_text_message)
-    )
+    # Callback query handlers - IMPORTANT: Order matters, most specific first
     
-    # Callback query handlers
-    application.add_handler(
-        CallbackQueryHandler(
-            bot_handlers.handle_activation_callback,
-            pattern="^activate_"
-        )
-    )
+    # Admin callbacks
     application.add_handler(
         CallbackQueryHandler(
             admin_handlers.handle_admin_callback,
@@ -76,6 +67,16 @@ def setup_bot() -> Application:
             admin_handlers.handle_admin_callback,
             pattern="^(approve_payment_|reject_payment_|review_payment_)"
         )
+    )
+    
+    # User callbacks - general handler for everything else
+    application.add_handler(
+        CallbackQueryHandler(bot_handlers.handle_callback)
+    )
+    
+    # Text message handler - must be last
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler.handle_text_message)
     )
     
     logger.success("Bot handlers configured successfully!")

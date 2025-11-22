@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 from app.database import AsyncSessionLocal
@@ -11,6 +11,33 @@ from loguru import logger
 class MessageHandler:
     """Handler for text messages"""
     
+    async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show help message"""
+        msg = "ℹ️ *Help*\n\n"
+        msg += "🎬 *How to Play:*\n"
+        msg += "1. Watch video without subtitles\n"
+        msg += "2. Send voice message repeating phrase\n"
+        msg += "3. Answer multiple choice question\n"
+        msg += "4. Earn points & climb leaderboard!\n\n"
+        msg += "🎯 *Points:*\n"
+        msg += f"• Voice correct: {settings.POINTS_VOICE_CORRECT}pts\n"
+        msg += f"• Question correct: {settings.POINTS_QUESTION_CORRECT}pts\n"
+        msg += f"• Max per video: {settings.POINTS_VOICE_CORRECT + settings.POINTS_QUESTION_CORRECT}pts\n\n"
+        msg += "🎤 *Voice Tips:*\n"
+        msg += "• Speak clearly\n"
+        msg += "• Try to match pronunciation\n"
+        msg += f"• You get {settings.MAX_VOICE_ATTEMPTS} attempts\n"
+        msg += "• Subtitles shown if needed\n\n"
+        msg += "💡 Need support? Contact @admin"
+        
+        keyboard = [[InlineKeyboardButton("◀️ Back to Menu", callback_data="back_to_main")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+    
     async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle text messages from users"""
         
@@ -21,28 +48,11 @@ class MessageHandler:
             await self.handle_question_answer(update, context)
             return
         
-        # Handle menu buttons
-        if text == "🎬 Start Challenge":
-            from app.bot.handlers import bot_handlers
-            await bot_handlers.handle_start_challenge(update, context)
-        
-        elif text == "📊 Leaderboard":
-            from app.bot.handlers import bot_handlers
-            await bot_handlers.show_leaderboard(update, context)
-        
-        elif text == "📈 My Stats":
-            from app.bot.handlers import bot_handlers
-            await bot_handlers.show_my_stats(update, context)
-        
-        elif text == "ℹ️ Help":
-            await self.show_help(update, context)
-        
-        else:
-            # Unknown message
-            await update.message.reply_text(
-                "❓ I don't understand that command.\n"
-                "Use the menu buttons or type /help"
-            )
+        # Unknown message
+        await update.message.reply_text(
+            "❓ I don't understand that command.\n\n"
+            "Use the menu buttons to navigate."
+        )
     
     async def handle_question_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle user's answer to question"""
@@ -126,32 +136,6 @@ class MessageHandler:
             # Send next video
             from app.bot.handlers import bot_handlers
             await bot_handlers.send_next_video(update, context, db)
-    
-    async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show help message"""
-        help_text = (
-            "ℹ️ Help\n\n"
-            "🎬 *How to Play:*\n"
-            "1. Watch the video without subtitles\n"
-            "2. Send a voice message repeating the phrase\n"
-            "3. Answer the multiple choice question\n"
-            "4. Earn points and climb the leaderboard!\n\n"
-            "🎯 *Points:*\n"
-            f"• Voice correct: {settings.POINTS_VOICE_CORRECT} points\n"
-            f"• Question correct: {settings.POINTS_QUESTION_CORRECT} points\n"
-            f"• Max per video: {settings.POINTS_VOICE_CORRECT + settings.POINTS_QUESTION_CORRECT} points\n\n"
-            "🎤 *Voice Tips:*\n"
-            "• Speak clearly\n"
-            "• Try to match the pronunciation\n"
-            f"• You get {settings.MAX_VOICE_ATTEMPTS} attempts\n"
-            "• Subtitles shown after first attempts\n\n"
-            "📱 *Commands:*\n"
-            "/start - Restart bot\n"
-            "/help - Show this message\n\n"
-            "Need support? Contact @admin"
-        )
-        
-        await update.message.reply_text(help_text, parse_mode='Markdown')
 
 
 # Global instance
