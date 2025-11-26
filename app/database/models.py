@@ -1,5 +1,4 @@
 from sqlalchemy import Column, Integer, BigInteger, String, Boolean, DateTime, Float, ForeignKey, Text, Enum
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, DateTime, Float, ForeignKey, Text, Enum
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -32,13 +31,22 @@ class User(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)
-    telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)
     username = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
     status = Column(Enum(UserStatus), default=UserStatus.PENDING)
+    
+    # Block/Ban fields
+    blocked = Column(Boolean, default=False)
+    blocked_at = Column(DateTime, nullable=True)
+    blocked_by = Column(BigInteger, nullable=True)  # Admin telegram_id who blocked
+    blocked_reason = Column(String, nullable=True)
+    
+    # Referral fields
     referral_code = Column(String, unique=True, index=True)
     referred_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     referral_count = Column(Integer, default=0)
+    
+    # Points and timestamps
     total_points = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -63,6 +71,7 @@ class Payment(Base):
     approved_at = Column(DateTime, nullable=True)
     approved_by = Column(BigInteger, nullable=True)
     rejection_reason = Column(Text, nullable=True)
+    
     # Relationships
     user = relationship("User", back_populates="payments")
 

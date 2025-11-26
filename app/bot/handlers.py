@@ -15,6 +15,9 @@ from app.database.models import (
 )
 
 
+from app.bot.rate_limiter import rate_limiter
+from app.bot.middleware import check_user_blocked
+
 class BotHandlers:
     """Main bot handlers for user interactions"""
     
@@ -23,10 +26,33 @@ class BotHandlers:
         """Get database session"""
         return AsyncSessionLocal()
     
+    @check_user_blocked  # Add this decorator
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
-        user = update.effective_user
+        # Check rate limit
+        user_id = update.effective_user.id
+        is_allowed, reason, cooldown = rate_limiter.check_rate_limit(user_id)
         
+        if not is_allowed:
+            if reason == "temp_banned":
+                await update.message.reply_text(
+                    f"⏸️ *Slow down!*\n\n"
+                    f"You're sending messages too fast.\n"
+                    f"Please wait {cooldown} seconds.",
+                    parse_mode='Markdown'
+                )
+            elif reason == "severe_spam":
+                await update.message.reply_text(
+                    f"🚫 *Spam detected!*\n\n"
+                    f"You've been temporarily restricted.\n"
+                    f"Cooldown: {cooldown} seconds.",
+                    parse_mode='Markdown'
+                )
+            return
+        
+        # Rest of your start_command code...
+        user = update.effective_user
+        # ... existing code ...
         # Extract referral code from /start parameter
         referral_code = None
         if context.args and len(context.args) > 0:
@@ -251,13 +277,49 @@ class BotHandlers:
                 else:
                     msg += "You've unlocked all referral rewards! 🏆"
             
-            keyboard = [[InlineKeyboardButton("◀️ Back", callback_data="back_to_main")]]
+            # Build keyboard with referral button for active users
+            keyboard = []
+            if user.status == UserStatus.ACTIVE:
+                keyboard.append([InlineKeyboardButton("👥 Invite Friends", callback_data="show_referral_link")])
+            keyboard.append([InlineKeyboardButton("◀️ Back", callback_data="back_to_main")])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             if update.callback_query:
                 await update.callback_query.edit_message_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
             else:
                 await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+    
+    
+    
+    async def show_referral_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show referral link for active users"""
+        user_id = update.effective_user.id
+        
+        async with self.get_db() as db:
+            user = await user_service.get_user_by_telegram_id(db, user_id)
+            
+            ref_link = f"https://t.me/{context.bot.username}?start={user.referral_code}"
+            
+            msg = f"👥 *Invite Friends & Earn Bonuses!*\n\n"
+            msg += f"Share your link: `{ref_link}`\n\n"
+            msg += f"📊 Progress: {user.referral_count} friends invited\n\n"
+            
+            if user.referral_count >= settings.REFERRAL_REQUIREMENT:
+                msg += "🏆 You've completed the referral requirement!\n"
+                msg += "Keep inviting for extra rewards! 🎁"
+            else:
+                msg += f"Invite {settings.REFERRAL_REQUIREMENT - user.referral_count} more friends to unlock rewards! 🎁"
+            
+            keyboard = [[InlineKeyboardButton("◀️ Back", callback_data="show_account")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if update.callback_query:
+                await update.callback_query.edit_message_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+
+    
     
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle all callbacks"""
@@ -279,6 +341,8 @@ class BotHandlers:
             await self.show_my_stats(update, context)
         elif query.data == "show_account":
             await self.show_account_menu(update, context)
+        elif query.data == "show_referral_link":  # ADD THIS
+            await self.show_referral_link(update, context)
         elif query.data == "show_activation":
             user_id = query.from_user.id
             async with self.get_db() as db:
@@ -288,7 +352,7 @@ class BotHandlers:
             await self.show_help(update, context)
         elif query.data.startswith("activate_"):
             await self.handle_activation_callback(update, context)
-    
+        
     async def handle_start_challenge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start challenge"""
         user_id = update.effective_user.id

@@ -493,7 +493,6 @@ class AdminHandlers:
                 parse_mode='Markdown',
                 reply_markup=reply_markup
             )
-    
     async def show_pending_payments(self, query, context):
         """Show pending payment approvals with glass buttons"""
         async with AsyncSessionLocal() as db:
@@ -508,10 +507,10 @@ class AdminHandlers:
                 keyboard = [[InlineKeyboardButton("🏠 Back to Panel", callback_data="admin_back")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                await query.edit_message_text(
+                await self.safe_edit_or_send(
+                    query, context,
                     "✅ *No pending payments!*",
-                    parse_mode='Markdown',
-                    reply_markup=reply_markup
+                    reply_markup
                 )
                 return
 
@@ -523,15 +522,23 @@ class AdminHandlers:
             for payment in payments[:10]:
                 user = await db.get(User, payment.user_id)
                 payment_type = "📸" if payment.payment_method == "manual" else "💳"
+                
+                # Format user display properly
+                if user.username:
+                    user_display = f"@{user.username}"
+                else:
+                    user_display = f"ID: {user.telegram_id}"
 
-                text += f"║ {payment_type} @{user.username or user.telegram_id}\n"
-                text += f"║ ${payment.amount} • ID: {payment.id}\n"
+                text += f"║ {payment_type} {user_display}\n"
+                text += f"║ ${payment.amount} • Payment #{payment.id}\n"
                 text += f"╠═══════════════════════════╣\n"
 
                 if payment.payment_method == "manual" and payment.payment_receipt_file_id:
+                    # Button text should also be formatted properly
+                    button_text = f"@{user.username}" if user.username else f"ID {user.telegram_id}"
                     keyboard.append([
                         InlineKeyboardButton(
-                            f"👁️ Review {user.username or user.telegram_id}",
+                            f"👁️ Review {button_text}",
                             callback_data=f"review_payment_{payment.id}"
                         )
                     ])
@@ -540,8 +547,9 @@ class AdminHandlers:
             keyboard.append([InlineKeyboardButton("🏠 Back to Panel", callback_data="admin_back")])
 
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
-    
+            await self.safe_edit_or_send(query, context, text, reply_markup)
+            
+        
     async def review_payment(self, query, context, payment_id: int):
         """Show payment receipt for review"""
         async with AsyncSessionLocal() as db:
@@ -551,6 +559,12 @@ class AdminHandlers:
                 return
 
             user = await db.get(User, payment.user_id)
+            
+            # Format user display
+            if user.username:
+                user_display = f"@{user.username}"
+            else:
+                user_display = f"ID: {user.telegram_id}"
 
             keyboard = [
                 [
@@ -567,9 +581,9 @@ class AdminHandlers:
                     photo=payment.payment_receipt_file_id,
                     caption=(
                         f"💳 *Payment Receipt*\n\n"
-                        f"User: @{user.username or user.telegram_id}\n"
+                        f"User: {user_display}\n"
                         f"Amount: ${payment.amount}\n"
-                        f"ID: {payment.id}\n"
+                        f"Payment ID: #{payment.id}\n"
                         f"Date: {payment.created_at.strftime('%Y-%m-%d %H:%M')}"
                     ),
                     parse_mode='Markdown',
@@ -579,7 +593,8 @@ class AdminHandlers:
             except Exception as e:
                 logger.error(f"Failed to show receipt: {e}")
                 await query.answer("❌ Failed to load receipt")
-
+    
+    
     async def approve_payment(self, query, context, payment_id: int):
         """Approve a payment"""
         async with AsyncSessionLocal() as db:
@@ -596,6 +611,13 @@ class AdminHandlers:
             await db.commit()
 
             user = await db.get(User, payment.user_id)
+            
+            # Format user display
+            if user.username:
+                user_display = f"@{user.username}"
+            else:
+                user_display = f"ID: {user.telegram_id}"
+            
             try:
                 keyboard = [[InlineKeyboardButton("🎬 Start Challenge", callback_data="start_challenge")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -620,12 +642,13 @@ class AdminHandlers:
             
             try:
                 await query.edit_message_caption(
-                    caption=f"✅ *Approved for:* @{user.username or user.telegram_id}",
+                    caption=f"✅ *Approved for:* {user_display}",
                     parse_mode='Markdown',
                     reply_markup=reply_markup
                 )
             except:
                 pass
+
 
     async def reject_payment(self, query, context, payment_id: int):
         """Reject a payment"""
@@ -641,6 +664,13 @@ class AdminHandlers:
             await db.commit()
 
             user = await db.get(User, payment.user_id)
+            
+            # Format user display
+            if user.username:
+                user_display = f"@{user.username}"
+            else:
+                user_display = f"ID: {user.telegram_id}"
+            
             try:
                 keyboard = [[InlineKeyboardButton("🔄 Try Again", callback_data="show_account")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -665,13 +695,14 @@ class AdminHandlers:
             
             try:
                 await query.edit_message_caption(
-                    caption=f"❌ *Rejected for:* @{user.username or user.telegram_id}",
+                    caption=f"❌ *Rejected for:* {user_display}",
                     parse_mode='Markdown',
                     reply_markup=reply_markup
                 )
             except:
-                pass
-    
+                pass    
+
+        
     async def show_stats(self, query, context):
         """Show system statistics"""
         async with AsyncSessionLocal() as db:
@@ -705,5 +736,218 @@ class AdminHandlers:
             await query.edit_message_text(stats_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 
+
+    async def show_user_management(self, query, context):
+        """Show user management menu"""
+        keyboard = [
+            [InlineKeyboardButton("🔍 Search User", callback_data="admin_search_user")],
+            [InlineKeyboardButton("🚫 Blocked Users", callback_data="admin_blocked_users")],
+            [InlineKeyboardButton("🏠 Back to Panel", callback_data="admin_back")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "👥 *User Management*\n\n"
+            "╔═══════════════════════════╗\n"
+            "║ Search & Block Users      │\n"
+            "╚═══════════════════════════╝\n\n"
+            "Select an option:",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+    async def handle_block_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /block_user command"""
+        if not self.is_admin(update.effective_user.id):
+            return
+        
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "⚠️ *Usage:* `/block_user [telegram_id] [reason]`\n\n"
+                "Example: `/block_user 123456789 Spam`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            target_telegram_id = int(context.args[0])
+            reason = ' '.join(context.args[1:])
+            
+            async with AsyncSessionLocal() as db:
+                user = await user_service.get_user_by_telegram_id(db, target_telegram_id)
+                
+                if not user:
+                    await update.message.reply_text("❌ User not found.")
+                    return
+                
+                # Block user
+                user.blocked = True
+                user.blocked_at = datetime.utcnow()
+                user.blocked_by = update.effective_user.id
+                user.blocked_reason = reason
+                
+                await db.commit()
+                
+                # Notify user
+                try:
+                    await context.bot.send_message(
+                        chat_id=target_telegram_id,
+                        text=(
+                            "🚫 *Your account has been blocked.*\n\n"
+                            f"Reason: {reason}\n\n"
+                            "Contact support for more information."
+                        ),
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify blocked user: {e}")
+                
+                await update.message.reply_text(
+                    f"✅ *User blocked successfully!*\n\n"
+                    f"User: @{user.username or target_telegram_id}\n"
+                    f"Reason: {reason}",
+                    parse_mode='Markdown'
+                )
+        
+        except ValueError:
+            await update.message.reply_text("❌ Invalid telegram ID.")
+
+    async def handle_unblock_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /unblock_user command"""
+        if not self.is_admin(update.effective_user.id):
+            return
+        
+        if len(context.args) < 1:
+            await update.message.reply_text(
+                "⚠️ *Usage:* `/unblock_user [telegram_id]`\n\n"
+                "Example: `/unblock_user 123456789`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            target_telegram_id = int(context.args[0])
+            
+            async with AsyncSessionLocal() as db:
+                user = await user_service.get_user_by_telegram_id(db, target_telegram_id)
+                
+                if not user:
+                    await update.message.reply_text("❌ User not found.")
+                    return
+                
+                # Unblock user
+                user.blocked = False
+                user.blocked_at = None
+                user.blocked_by = None
+                user.blocked_reason = None
+                
+                await db.commit()
+                
+                # Notify user
+                try:
+                    await context.bot.send_message(
+                        chat_id=target_telegram_id,
+                        text=(
+                            "✅ *Your account has been unblocked!*\n\n"
+                            "You can now use the bot again."
+                        ),
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify unblocked user: {e}")
+                
+                await update.message.reply_text(
+                    f"✅ *User unblocked successfully!*\n\n"
+                    f"User: @{user.username or target_telegram_id}",
+                    parse_mode='Markdown'
+                )
+        
+        except ValueError:
+            await update.message.reply_text("❌ Invalid telegram ID.")
+
+    async def show_blocked_users(self, query, context):
+        """Show list of blocked users"""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(User)
+                .where(User.blocked == True)
+                .order_by(User.blocked_at.desc())
+            )
+            blocked_users = result.scalars().all()
+            
+            if not blocked_users:
+                keyboard = [[InlineKeyboardButton("🏠 Back", callback_data="admin_user_management")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                try:
+                    await query.edit_message_text(
+                        "✅ *No blocked users!*",
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    )
+                except Exception:
+                    await query.message.delete()
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text="✅ *No blocked users!*",
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    )
+                return
+            
+            text = "🚫 *Blocked Users*\n\n"
+            text += "╔═══════════════════════════╗\n"
+            
+            keyboard = []
+            
+            for user in blocked_users[:10]:
+                text += f"║ @{user.username or user.telegram_id}\n"
+                text += f"║ Reason: {user.blocked_reason or 'N/A'}\n"
+                text += f"╠═══════════════════════════╣\n"
+                
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"🔓 Unblock @{user.username or user.telegram_id}",
+                        callback_data=f"unblock_user_{user.telegram_id}"
+                    )
+                ])
+            
+            text += "╚═══════════════════════════╝"
+            keyboard.append([InlineKeyboardButton("🏠 Back", callback_data="admin_user_management")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            try:
+                await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+            except Exception:
+                await query.message.delete()
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text=text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            
+            
+    async def safe_edit_or_send(self, query, context, text, reply_markup, parse_mode='Markdown'):
+        """Safely edit message or send new one if editing fails"""
+        try:
+            await query.edit_message_text(
+                text=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.warning(f"Failed to edit message: {e}. Sending new message instead.")
+            try:
+                await query.message.delete()
+            except:
+                pass
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
 # Global instance
 admin_handlers = AdminHandlers()
